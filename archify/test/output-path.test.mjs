@@ -251,9 +251,11 @@ test('deliver rejects a future-path alias of its JSON input with a structured di
   fs.mkdirSync(realDirectory);
   fs.symlinkSync(realDirectory, linkedDirectory, 'dir');
   const input = path.join(realDirectory, 'diagram.workflow.json');
-  const output = path.join(linkedDirectory, 'diagram.workflow.json');
+  const outputTarget = path.join(realDirectory, 'diagram.html');
+  const output = path.join(linkedDirectory, 'diagram.html');
   const source = fs.readFileSync(workflowFixture);
   fs.writeFileSync(input, source);
+  fs.symlinkSync(input, outputTarget, 'file');
 
   const result = run(['deliver', 'workflow', input, output, '--json'], cwd);
 
@@ -306,7 +308,7 @@ console.log(JSON.stringify({
   fs.mkdirSync(initialOutputDirectory);
   fs.symlinkSync(initialOutputDirectory, linkedDirectory, 'dir');
   const input = path.join(inputDirectory, 'diagram.json');
-  const output = path.join(linkedDirectory, 'diagram.json');
+  const output = path.join(linkedDirectory, 'diagram.html');
   const source = Buffer.from('{"meta":{"title":"race input"}}');
   fs.writeFileSync(input, source);
   const marker = path.join(cwd, 'renderer-started');
@@ -335,6 +337,7 @@ console.log(JSON.stringify({
   const candidatePath = fs.readFileSync(marker, 'utf8');
   const candidateRelative = path.relative(linkedDirectory, candidatePath);
   fs.mkdirSync(path.dirname(path.join(inputDirectory, candidateRelative)), { recursive: true });
+  fs.symlinkSync(input, path.join(inputDirectory, 'diagram.html'), 'file');
   fs.unlinkSync(linkedDirectory);
   fs.symlinkSync(inputDirectory, linkedDirectory, 'dir');
 
@@ -440,16 +443,24 @@ test('the shared renderer rechecks its guarded output immediately before writing
   fs.mkdirSync(initialOutputDirectory);
   fs.symlinkSync(initialOutputDirectory, linkedDirectory, 'dir');
   const input = path.join(inputDirectory, 'diagram.workflow.json');
-  const output = path.join(linkedDirectory, 'diagram.workflow.json');
+  const output = path.join(linkedDirectory, 'diagram.html');
   const source = fs.readFileSync(workflowFixture);
   fs.writeFileSync(input, source);
 
-  const loaded = loadDiagram({
-    rendererDir: path.join(skillRoot, 'renderers/workflow'),
-    diagramType: 'workflow',
-    defaultExample: 'agent-tool-call.workflow.json',
-    argv: ['node', 'render-workflow.mjs', input, output],
-  });
+  const previousCwd = process.cwd();
+  process.chdir(cwd);
+  let loaded;
+  try {
+    loaded = loadDiagram({
+      rendererDir: path.join(skillRoot, 'renderers/workflow'),
+      diagramType: 'workflow',
+      defaultExample: 'agent-tool-call.workflow.json',
+      argv: ['node', 'render-workflow.mjs', input, output],
+    });
+  } finally {
+    process.chdir(previousCwd);
+  }
+  fs.symlinkSync(input, path.join(inputDirectory, 'diagram.html'), 'file');
   fs.unlinkSync(linkedDirectory);
   fs.symlinkSync(inputDirectory, linkedDirectory, 'dir');
 
@@ -534,7 +545,7 @@ export const validateArchitectureDeltaHtml = () => ({ checksPassed: 1, checkCoun
   fs.symlinkSync(initialOutputDirectory, linkedDirectory, 'dir');
   const base = path.join(inputDirectory, 'diagram.json');
   const head = path.join(cwd, 'head.json');
-  const output = path.join(linkedDirectory, 'diagram.json');
+  const output = path.join(linkedDirectory, 'diagram.html');
   const source = Buffer.from('{"side":"base"}');
   fs.writeFileSync(base, source);
   fs.writeFileSync(head, '{"side":"head"}');
@@ -564,6 +575,7 @@ export const validateArchitectureDeltaHtml = () => ({ checksPassed: 1, checkCoun
   const candidatePath = fs.readFileSync(marker, 'utf8');
   const candidateRelative = path.relative(linkedDirectory, candidatePath);
   fs.mkdirSync(path.dirname(path.join(inputDirectory, candidateRelative)), { recursive: true });
+  fs.symlinkSync(base, path.join(inputDirectory, 'diagram.html'), 'file');
   fs.unlinkSync(linkedDirectory);
   fs.symlinkSync(inputDirectory, linkedDirectory, 'dir');
 
@@ -591,7 +603,7 @@ test('doctor reports a missing output-path safety runtime in an installed skill'
   assert.match(result.stdout, /\[missing\] Output path safety runtime/);
 });
 
-test('deliver rejects a CLI output that escapes the working directory', () => {
+test('deliver rejects a non-html CLI output and preserves the existing file', () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'archify-output-cli-parent-'));
   const cwd = path.join(parent, 'work');
   fs.mkdirSync(cwd);
@@ -609,7 +621,7 @@ test('deliver rejects a CLI output that escapes the working directory', () => {
   assert.equal(fs.readFileSync(escaped, 'utf8'), 'preserve-me\n');
 });
 
-test('deliver rejects a CLI .html path that escapes the working directory', () => {
+test('deliver preserves explicit CLI .html output directories', () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'archify-output-cli-html-parent-'));
   const cwd = path.join(parent, 'work');
   fs.mkdirSync(cwd);
@@ -619,11 +631,11 @@ test('deliver rejects a CLI .html path that escapes the working directory', () =
 
   const result = run(['deliver', 'workflow', input, '../escaped.html', '--json'], cwd);
 
-  assert.equal(result.status, 1);
+  assert.equal(result.status, 0, result.stderr);
   const receipt = JSON.parse(result.stdout);
-  assert.equal(receipt.ok, false);
-  assert.equal(receipt.diagnostics[0].code, 'output/cli-outside-cwd');
-  assert.equal(fs.existsSync(escaped), false);
+  assert.equal(receipt.ok, true);
+  assert.equal(receipt.output, fs.realpathSync.native(escaped));
+  assert.match(fs.readFileSync(escaped, 'utf8'), /^<!DOCTYPE html>/);
 });
 
 test('compare rejects a non-json CLI receipt path', () => {
