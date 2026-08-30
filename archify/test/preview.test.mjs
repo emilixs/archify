@@ -57,9 +57,11 @@ function rawRequest(url, { method = 'GET', pathname = '/', hostHeader } = {}) {
 test('preview: rejects destructive or unsupported startup targets before watching', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'archify-preview-startup-'));
   const input = path.join(tmp, 'diagram.json');
+  const destructiveOutput = path.join(tmp, 'diagram.html');
   fs.writeFileSync(input, '{}');
+  fs.symlinkSync(input, destructiveOutput, 'file');
   await assert.rejects(
-    startPreview({ type: 'architecture', input, output: input, open: false }),
+    startPreview({ type: 'architecture', input, output: destructiveOutput, open: false }),
     /must not replace its JSON input/i,
   );
   await assert.rejects(
@@ -75,11 +77,13 @@ test('preview: rejects destructive or unsupported startup targets before watchin
   const linkedDirectory = path.join(tmp, 'linked');
   fs.mkdirSync(realDirectory);
   fs.symlinkSync(realDirectory, linkedDirectory, 'dir');
+  const futureInput = path.join(realDirectory, 'future.json');
+  fs.symlinkSync(futureInput, path.join(realDirectory, 'future.html'), 'file');
   await assert.rejects(
     startPreview({
       type: 'architecture',
-      input: path.join(realDirectory, 'future.json'),
-      output: path.join(linkedDirectory, 'future.json'),
+      input: futureInput,
+      output: path.join(linkedDirectory, 'future.html'),
       open: false,
     }),
     /must not replace its JSON input/i,

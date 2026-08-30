@@ -247,6 +247,11 @@ export class OutputPathError extends Error {
   }
 }
 
+function normalizeRequiredExtension(extension) {
+  const value = String(extension || '.html').trim().toLowerCase();
+  return value.startsWith('.') ? value : `.${value}`;
+}
+
 export function resolveOutputPath({
   requestedOutput,
   authoredOutput,
@@ -255,9 +260,18 @@ export function resolveOutputPath({
   inputDescription = 'an input',
   otherOutputPaths = [],
   cwd = process.cwd(),
+  // Artifact outputs default to .html. Compare receipts pass '.json'.
+  requiredExtension = '.html',
 }) {
   const rawOutput = requestedOutput || authoredOutput || defaultOutput;
   const source = requestedOutput ? 'cli' : (authoredOutput ? 'meta' : 'default');
+  const extension = source === 'meta' ? '.html' : normalizeRequiredExtension(requiredExtension);
+  const label = source === 'meta' ? 'meta.output' : 'CLI output';
+  const extensionGuardedSource = source === 'meta' || source === 'cli';
+
+  // meta.output stays authored-relative and cwd-confined. Explicit CLI paths
+  // retain their existing absolute/out-of-cwd support, but must use the safe
+  // artifact extension before and after symbolic-link resolution.
   if (
     source === 'meta'
     && (path.isAbsolute(rawOutput) || path.posix.isAbsolute(rawOutput) || path.win32.isAbsolute(rawOutput))
@@ -269,21 +283,42 @@ export function resolveOutputPath({
       supportedFixes: ['set meta.output to a relative .html path inside the current working directory'],
     });
   }
-  if (source === 'meta' && path.extname(rawOutput).toLowerCase() !== '.html') {
-    throw new OutputPathError('meta.output must target an .html file.', {
-      code: 'output/meta-extension',
-      message: 'meta.output must target an .html file.',
-      subject: { output: rawOutput },
-      supportedFixes: ['change meta.output to a path ending in .html'],
+  if (extensionGuardedSource && path.extname(rawOutput).toLowerCase() !== extension) {
+    throw new OutputPathError(`${label} must target a ${extension} file.`, {
+      code: source === 'meta' ? 'output/meta-extension' : 'output/cli-extension',
+      message: `${label} must target a ${extension} file.`,
+      subject: { output: rawOutput, requiredExtension: extension },
+      supportedFixes: [
+        source === 'meta'
+          ? 'change meta.output to a path ending in .html'
+          : `change the CLI output path to end in ${extension}`,
+      ],
     });
   }
   const outputPath = path.resolve(cwd, rawOutput);
-  if (source === 'meta' && path.extname(canonicalFuturePath(outputPath)).toLowerCase() !== '.html') {
-    throw new OutputPathError('meta.output must resolve to an .html file.', {
-      code: 'output/meta-resolved-extension',
-      message: 'meta.output must resolve to an .html file after symbolic links are followed.',
-      subject: { output: rawOutput },
-      supportedFixes: ['remove the symbolic-link alias or point it to an .html target inside the current working directory'],
+  // Preserve the stronger input-alias diagnostic for CLI paths before
+  // following a symlink can make an otherwise-valid extension appear unsafe.
+  // The raw CLI extension gate above still rejects ordinary non-artifact
+  // targets such as ../marker.env.
+  if (source === 'cli') {
+    for (const inputPath of inputPaths) {
+      if (!pathsAlias(outputPath, inputPath)) continue;
+      throw new OutputPathError(`Output must not replace ${inputDescription}.`, {
+        code: 'output/input-alias',
+        message: `Output must not replace ${inputDescription}, including through a symbolic-link or future-path alias.`,
+        subject: { output: outputPath, input: path.resolve(inputPath) },
+        supportedFixes: ['choose an output path that is distinct from every input path'],
+      });
+    }
+  }
+  if (extensionGuardedSource && path.extname(canonicalFuturePath(outputPath)).toLowerCase() !== extension) {
+    throw new OutputPathError(`${label} must resolve to a ${extension} file.`, {
+      code: source === 'meta' ? 'output/meta-resolved-extension' : 'output/cli-resolved-extension',
+      message: `${label} must resolve to a ${extension} file after symbolic links are followed.`,
+      subject: { output: rawOutput, requiredExtension: extension },
+      supportedFixes: [
+        `remove the symbolic-link alias or point it to a ${extension} target inside the current working directory`,
+      ],
     });
   }
   if (source === 'meta' && !pathIsInside(cwd, outputPath)) {
@@ -295,14 +330,16 @@ export function resolveOutputPath({
     });
   }
 
-  for (const inputPath of inputPaths) {
-    if (!pathsAlias(outputPath, inputPath)) continue;
-    throw new OutputPathError(`Output must not replace ${inputDescription}.`, {
-      code: 'output/input-alias',
-      message: `Output must not replace ${inputDescription}, including through a symbolic-link or future-path alias.`,
-      subject: { output: outputPath, input: path.resolve(inputPath) },
-      supportedFixes: ['choose an output path that is distinct from every input path'],
-    });
+  if (source !== 'cli') {
+    for (const inputPath of inputPaths) {
+      if (!pathsAlias(outputPath, inputPath)) continue;
+      throw new OutputPathError(`Output must not replace ${inputDescription}.`, {
+        code: 'output/input-alias',
+        message: `Output must not replace ${inputDescription}, including through a symbolic-link or future-path alias.`,
+        subject: { output: outputPath, input: path.resolve(inputPath) },
+        supportedFixes: ['choose an output path that is distinct from every input path'],
+      });
+    }
   }
   for (const otherOutputPath of otherOutputPaths) {
     if (!pathsAlias(outputPath, otherOutputPath)) continue;

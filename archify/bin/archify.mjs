@@ -473,6 +473,7 @@ async function commandCompare(args) {
       defaultOutput: compareReceiptPath(outputPath),
       inputPaths: [basePath, headPath],
       otherOutputPaths: [outputPath],
+      requiredExtension: '.json',
     }));
   } catch (error) {
     const outputDiagnostic = error.archifyDiagnostics?.[0];
@@ -646,6 +647,7 @@ async function commandCompare(args) {
         defaultOutput: compareReceiptPath(currentOutput),
         inputPaths: [basePath, headPath],
         otherOutputPaths: [currentOutput],
+        requiredExtension: '.json',
       });
     } catch (error) {
       const outputDiagnostic = error.archifyDiagnostics?.[0];
@@ -1826,10 +1828,14 @@ function commandValidate(args) {
     if (!['architecture', 'workflow'].includes(type)) {
       fail('--layout-json is currently supported for architecture and workflow diagrams only.');
     }
-    const result = runNode([renderer, input, '/dev/null', '--layout-json'], {
+    const layoutTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'archify-layout-json-'));
+    const layoutOutput = path.join(layoutTmp, `${type}.html`);
+    const result = runNode([renderer, input, layoutOutput, '--layout-json'], {
+      cwd: layoutTmp,
       stdio: 'pipe',
       env: rendererEnv(quality, repoRoot, true),
     });
+    fs.rmSync(layoutTmp, { recursive: true, force: true });
     if (result.status !== 0) {
       try {
         const receipt = JSON.parse(result.stdout);
